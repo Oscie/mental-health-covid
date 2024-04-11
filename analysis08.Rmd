@@ -1,0 +1,1329 @@
+---
+title: "P2035 Mental Health"
+author: "Rick Caplan"
+date: "2023-11-20"
+output:
+  html_document:
+    toc_float: yes
+    toc: yes
+    theme: flatly
+    fig_caption: yes
+subtitle: "Aim 2"
+---
+       
+**Data**    
+    
+* File AnalysisDataset_Aim2_20230804.xlsx.  
+* PreCovid Period:  3/1/2018 to 12/31/2018    
+* Covid Period:  3/1/2020 to 12/31/2020   
+* Non-Delaware patients excluded because missing census tract data.  
+* Patients < 16 years excluded.   
+* 13 patients were excluded.  
+   
+* Non-index violence care settings exclude Other & Outpatient Lab.  
+
+**Analysis**    
+   
+* Statistical tests for categorical & numeric variables are chi-squared and
+Wilcoxon rank sum   
+* Descriptive percentages exclude missing from calculation    
+     
+     
+**Acknowledgement**    
+    
+Work was supported by an Institutional Development Award (IDeA) from the
+National Institute of General Medical Sciences of the National Institutes
+of Health under grant number U54-GM104941 (PI: Hicks).    
+    
+      
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, include = TRUE)
+options(width=100) #Set width
+  
+library(MASS)
+library(gmodels)
+library(arsenal)
+library(broom)
+library(vcd)
+library(here)
+library(writexl)
+library(rms)
+library(qcc)
+
+Main <- TRUE
+var_select <- FALSE
+
+here::i_am('Rcode/analysis08.Rmd')
+
+source("create08.R")
+
+Controls <- tableby.control(
+  numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+  numeric.test = "wt",
+  cat.stats = c("countpct", "Nmiss2"),
+  cat.test = "chisq",
+  total = TRUE,
+  stats.labels = list(
+    meansd = "Mean (SD)",
+    medianq1q3 = "Median (IQR)",
+    range = "Min - Max",
+    Nmiss2 = "Missing"),
+  )
+
+library(knitr); library(kableExtra)
+note <- function( text ){
+  as_tibble( text ) %>% 
+    rename(" " = "value") %>% 
+    kbl() %>% 
+    kable_classic(font_size=20)
+}
+
+clrs <- MetBrewer::met.brewer("Johnson")
+
+theme_mfx <- function() {
+  theme(panel.grid.minor = element_blank(),
+        plot.background = element_rect(fill = "white", color = NA),
+        plot.title = element_text(face = "bold"),
+        axis.title = element_text(face = "bold"),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "grey80", color = NA),
+        legend.title = element_text(face = "bold"))
+}
+
+```
+          
+      
+# Table 1. Patient characteristics by period    
+     
+* Patient characteristics are characteristics captured at the index violence claim.   
+* Census tract data are not individual characteristics; they are data taken
+from the census tract survey where the patient lived, matching the year
+to the index claim year.   
+  
+        
+```{r table_1, results='asis', eval=Main}
+
+Table <- tableby( TimePeriod ~ Gender + Race + IndexViolenceClaimAge +
+                    IndexViolenceInsurance + 
+                    CensusTractMedianIncome + CenusTractPctBlackResidents +
+                    CensusTractPctLatino + CensusTractPctLessThanHighSchool +
+                    CensusTractPctPublicAssistanceHousehold +
+                    CensusTractPctUnemploymentRate + CensusTractSVI +
+                    PctBelowPovertyHousehold,
+                  data = df,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+x <- summary(Table, text = TRUE) %>% 
+  as.data.frame()
+write_xlsx(x, "Aim2_Table1.xlsx")
+```
+     
+# Table 2. Violence claim characteristics by period    
+    
+A patient may have more than 1 type of violence diagnosis.  
+    
+**PreIndexViolenceClaimDays** is total number of violence claim days
+occurring within 360 days prior to the index violence claim.    
+   
+**PostIndexViolenceClaimDays** is the total number of violence claim days
+occurring within 360 days after the index violence claim.   
+      
+The **IndexViolenceClaimCareSetting** called "Ambulance_hosp_acute"
+combines "Ambulance" & "Hospital Acute Inpatient".    
+    
+Tom created the variables, __PenetratingFlag, which combines the specific Penetrating traumas from firearms or sharp objects, as requested.    
+     
+```{r table_2, results='asis', eval=Main}
+
+Table <- tableby( TimePeriod ~ IndexViolenceClaimCareSetting +
+                    IndexClaimBluntFlag + IndexClaimBurnFlag + 
+                    IndexClaimPenetratingFlag + IndexClaimPenetratingFirearmFlag +
+                    IndexClaimPenetratingSharpObjectFlag +
+                    PreIndexViolenceClaimDays + PostIndexViolenceClaimDays, 
+                  data = df,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+  
+x <- summary(Table, text = TRUE) %>% 
+  as.data.frame()
+write_xlsx(x, "Aim2_Table2.xlsx")
+```
+    
+     
+     
+# Table 3. Mental health claims by period        
+
+A patient may have more than 1 mental health diagnosis.   
+     
+**Prior_MH_claim_xxx_xxx** and **MH_claim_xxx_xxx** are flags if there were
+MH claims in the corresponding time period prior or after the index
+violence claim.    
+    
+New variables were created to collapse the first month with the next 2
+months, as requested. If a person had a claim in either period, it was flagged.
+The claim days were added together from the 2 periods.  
+    
+**F01_F09** Mental disorders due to known physiological conditions  
+**F10_F19** Mental and behavioral disorders due to psychoactive substance use  
+**F20_F29** Schizophrenia, schizotypal, delusional, and other non-mood psychotic disorders  
+**F30_F39** Mood [affective] disorders  
+**F40_F48** Anxiety, dissociative, stress-related, somatoform and other nonpsychotic mental disorders  
+**F50_F59** Behavioral syndromes associated with physiological disturbances and physical factors  
+**F60_F69** Disorders of adult personality and behavior  
+**F70_F79** Intellectual disabilities  
+**F80_F89** Pervasive and specific developmental disorders  
+**F90_F98** Behavioral and emotional disorders with onset usually occurring in childhood and adolescence  
+**F99_F99** Unspecified mental disorder
+        
+```{r table_3, results='asis', eval=Main}
+
+Table <- tableby( TimePeriod ~ 
+                    Prior_MH_claim_001_030 + 
+                    PriorMHClaimDays_001_030 +
+                    Prior_MH_claim_031_090 +
+                    PriorMHClaimDays_031_090 +
+                    Prior_MH_claim_001_090 +
+                    PriorMHClaimDays_001_090 +
+                    Prior_MH_claim_091_180 +
+                    PriorMHClaimDays_091_180 + 
+                    Prior_MH_claim_181_360 +
+                    PriorMHClaimDays_181_360 +
+                    Prior_MH_claim_000_360 +
+                    PriorMHClaimDays_000_360 +
+                    
+                    MH_claim_000_030 + 
+                    MHClaimDays_000_030 +
+                    MH_claim_031_090 +
+                    MHClaimDays_031_090 +
+                    MH_claim_000_090 +
+                    MHClaimDays_000_090 +
+                    MH_claim_091_180 + 
+                    MHClaimDays_091_180 +
+                    MH_claim_181_360 +
+                    MHClaimDays_181_360 +
+                    MH_claim_000_360 +
+                    MHClaimDays_000_360 +
+                    
+                    F01_F09 + F10_F19 + F20_F29 + F30_F39 + 
+                    F40_F48 + F50_F59 + F60_F69 + F70_f79 + F80_F89 +
+                    F90_F98 + F99_F99,
+                  data = df,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+x <- summary(Table, text = TRUE) %>% 
+  as.data.frame()
+write_xlsx(x, "Aim2_Table3.xlsx")
+```
+    
+    
+# Graph 1. Percent of people with a mental health claim by period after index claim visit  
+     
+* The graph does not have a title on it. I think journals usually prefer
+to add the title above the graph in their final version.
+* Since the number of people in the PreCovid and Covid people are different,
+percentages are better side-by-side comparisons than counts.  
+* Since the duration of time periods differ, it cannot be concluded that
+there is a trend of rising percent with mental health claims after
+the first month.    
+* If different durations of claim periods are desired, like quarterly,
+the dataset would need to be modified.   
+    
+* When our graph is finalized, I'll make a separate jpg or png file.  
+* Interesting (to me) capability of the graphics package: "The viridis scales provide color maps that are perceptually uniform in both color and black-and-white. They are also designed to be perceived by viewers with common forms of color blindness."         
+     
+     
+```{r graph_1, eval=Main}
+df %>% 
+  group_by(TimePeriod) %>% 
+  summarize( m1 = sum( as.numeric(MH_claim_000_030) - 1 ),
+             m3 = sum( as.numeric(MH_claim_031_090) - 1 ),
+             m6 = sum( as.numeric(MH_claim_091_180) - 1 ),
+             mm12 = sum( as.numeric(MH_claim_181_360) - 1 )
+  ) %>% 
+  pivot_longer(cols = starts_with("m"),
+               names_to = "period",
+               values_to = "counts") %>% 
+  mutate(Total = ifelse(TimePeriod == "PreCovid", 527, 431),
+         percent = 100*counts/Total,
+         Period = paste0(TimePeriod, "_", period)) %>% 
+  
+  ggplot(aes(x=period, y=percent, fill=TimePeriod)) +
+  geom_col( position = position_dodge()  ) +
+  scale_fill_viridis_d() +
+  labs( x = "Months on or after index day",
+        y = "Percent with a mental health claim") +
+  theme( axis.title.x = element_text( size=15 ),
+         axis.title.y = element_text( size=15 ),
+         axis.text.x = element_text( size=15 ),
+         axis.text.y = element_text( size=15 ) ) +
+  scale_x_discrete( labels = c( "Month 1",
+                                "Months 2-3",
+                                "Months 4-6",
+                                "Months 7-12")) +
+  scale_y_continuous( breaks = c(10, 20, 30, 40, 50) )
+```
+    
+    
+# Graph 2. Distribution of MH claim days counts on or after index violence claim    
+     
+This PATIENT-LEVEL graph shows the distribution of MH claim days on or after the
+index violence claim day for the PreCovid and Covid periods.
+The graphs of the 2 distributions overlap.
+It's smoothed histograms.
+It's not a graph to put into an abstract,
+so I didn't bother to clean it up. It does support Claudine's comment
+that the mean is not a good descriptive statistic to characterize the
+distribution. The median isn't much better. Often it's not helpful
+to try to summarize a distribution with a single descriptive statistic.   
+       
+       
+```{r graph_2, eval=Main}
+df %>% 
+  ggplot( aes( x = MHClaimDays_000_360, fill = TimePeriod )) +
+  geom_density( alpha=0.6 ) +
+  scale_fill_viridis_d() +
+  scale_x_continuous( limits = c(0, 360) )
+```
+    
+# Graph 3. Distr of claim days     
+    
+These POPULATION-LEVELS graphs are more meaningful 
+graphs of distribution of claim days in the years
+before and after the index violence claim day. Counts show that
+there were more claim days, partially because there were more patients,
+in the PreCovid period. Density standardizes the counts so that the
+areas are the same. It shows the relative increase or decrease over time
+in the rates of MH claims. The Shewart control charts of the difference
+in MH claim days, Covid minus PreCovid, show the days when there
+were significant departures from the mean difference.    
+     
+```{r graph_3, eval=Main}
+
+#tiff("figure02.tif", height=700, width=900)
+ggplot(df_mh, aes(no_of_days, color=time_period)) + 
+  geom_freqpoly(position="identity", alpha=0.60, 
+                show.legend=TRUE, linewidth = 2 ) +
+  scale_fill_viridis_d() +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = c(0, 0)) +
+  theme(legend.position = "right") +
+  labs(title = "Smoothed histogram of counts of MH claim days",
+       x = "Number of days relative to index violence claim") 
+#dev.off()
+
+#tiff("figure01.tif", height=700, width=900)
+ggplot(df_mh, aes(no_of_days, fill=time_period)) + 
+  geom_density(position="identity", alpha=0.60) +
+  scale_fill_viridis_d() +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = c(0, 0)) +
+  labs(title = "Smoothed histogram of density of MH claim days",
+       x = "Number of days relative to index violence claim")
+#dev.off()
+
+#tiff("figure03.tif", height=700, width=900)
+filter(df_mh, no_of_days > 0) %>% 
+ggplot(aes(no_of_days, fill=time_period)) + 
+  geom_density(position="identity", alpha=0.60) +
+  scale_fill_viridis_d() +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = c(0, 0)) +
+  labs(title = "Smoothed histogram of density of MH claim days",
+       x = "Number of days relative to index violence claim")
+#dev.off()
+
+#tiff("figure04.tif", height=700, width=900)
+df_daily <- df_mh %>% 
+  filter( no_of_days < 0 ) %>% 
+  group_by( time_period, no_of_days ) %>% 
+  arrange( no_of_days ) %>% 
+  summarize( Count = n() )
+
+df_wide <- df_daily %>% 
+  pivot_wider(
+    names_from = time_period,
+    values_from = Count) %>% 
+  mutate(Difference = Covid - PreCovid)
+
+q <- qcc(df_wide$Difference, type="xbar.one", plot=FALSE)
+plot(q, title="Covid-PreCovid claim counts BEFORE index violence claim")
+#dev.off()
+
+#tiff("figure05.tif", height=700, width=900)
+df_daily <- df_mh %>% 
+  filter( no_of_days > 0 ) %>% 
+  group_by( time_period, no_of_days ) %>% 
+  arrange( no_of_days ) %>% 
+  summarize( Count = n() )
+
+df_wide <- df_daily %>% 
+  pivot_wider(
+    names_from = time_period,
+    values_from = Count) %>% 
+  mutate(Difference = Covid - PreCovid)
+
+q <- qcc(df_wide$Difference, type="xbar.one", plot=FALSE)
+plot(q, title="Covid-PreCovid claim counts AFTER index violence claim")
+#dev.off()
+
+
+```
+    
+    
+# Table 4. Crosstab of zero or some MH claims, prior vs post   
+    
+There are many who had no MH claims on or after the index day. Here
+"post" refers to days on or after the index day, and "prior" refers
+to days prior to the index day.   
+     
+Table 3, variable MH_claim_000_360, shows that 25.6% PreCovid and 29.7% Covid
+did not have a Mental Health claim on or after the index day. 
+    
+    
+Did patients who did not have a prior MH claim before the index day
+have subsequent MH claims?    
+     
+Looking at the totals, in the PreCovid period, there were 527 people
+of whom 188 (35.7%) had no prior MH claim. Of these 188 people with no
+prior MH claim, 92 (48.9%) later had a MH claim.   
+    
+In the Covid period, there were 431 people of whom 177 (41.1%) had no
+prior MH claim. Of these 177 people, 79 (44.6%) later had a MH claim.  
+    
+    
+```{r table_4, eval=Main}
+tmp <- df %>% 
+  mutate( post = ifelse( MHClaimDays_000_360 == 0, 'zero MH post', 'some MH post' ),
+          prior = ifelse( PriorMHClaimDays_000_360 == 0, 'zero MH prior', 'some MH prior') )
+
+cat("PreCovid period")
+
+with( filter( tmp, TimePeriod == "PreCovid" ),
+     CrossTable( prior, post, prop.chisq = F ))
+
+cat("Covid period")
+
+with( filter( tmp, TimePeriod == "Covid" ),
+      CrossTable( prior, post, prop.chisq = F ))
+```
+      
+      
+# Table 5. MH claims in subset with MH claims  
+     
+     
+```{r table_5, results='asis', eval=Main}
+Table <- tableby( TimePeriod ~ 
+                    Prior_MH_claim_001_030 + 
+                    PriorMHClaimDays_001_030 +
+                    Prior_MH_claim_031_090 +
+                    PriorMHClaimDays_031_090 +
+                    Prior_MH_claim_001_090 +
+                    PriorMHClaimDays_001_090 +
+                    Prior_MH_claim_091_180 +
+                    PriorMHClaimDays_091_180 + 
+                    Prior_MH_claim_181_360 +
+                    PriorMHClaimDays_181_360 +
+                    Prior_MH_claim_000_360 +
+                    PriorMHClaimDays_000_360 +
+                    
+                    MH_claim_000_030 + 
+                    MHClaimDays_000_030 +
+                    MH_claim_031_090 +
+                    MHClaimDays_031_090 +
+                    MH_claim_000_090 +
+                    MHClaimDays_000_090 +
+                    MH_claim_091_180 + 
+                    MHClaimDays_091_180 +
+                    MH_claim_181_360 +
+                    MHClaimDays_181_360 +
+                    MH_claim_000_360 +
+                    MHClaimDays_000_360 +
+                    
+                    F01_F09 + F10_F19 + F20_F29 + F30_F39 + 
+                    F40_F48 + F50_F59 + F60_F69 + F70_f79 + F80_F89 +
+                    F90_F98 + F99_F99,
+                  data = filter( df, MH_claim_000_360 == 'Yes' ),
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+x <- summary(Table, text = TRUE) %>% 
+  as.data.frame()
+write_xlsx(x, "Aim2_Table5.xlsx")
+```
+    
+    
+    
+# Table 6a. Any claim days in year PRIOR to index violence claim?    
+     
+Methods: After a descriptive table, logistic regression is used. 
+The dependent variable is a binary flag of any mental health claim days in the year 
+prior to the index violence claim. Covariates are examined one at a time, then
+a selection is included in a multivariable model.   
+     
+```{r eval=var_select}
+# Variable selection
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI)
+Var_names <- names(Var)
+Formula <- as.formula(paste("Prior_MH_claim_000_360 ~",paste(Var_names, collapse="+")))
+rf <- randomForest::randomForest( Formula,
+                    na.action = na.omit,
+                    importance = TRUE,
+                    data = df )
+
+note("Random forest importance")
+randomForest::importance(rf) %>% 
+  as.data.frame() %>% 
+  mutate( across(where(is.numeric), ~ round(.x, 2)) ) %>% 
+  arrange( desc(MeanDecreaseGini) )
+
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+
+note("Collinearity")
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI)
+Var_names <- names(Var)
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+```
+
+     
+     
+```{r table_6a}
+note("Univariable analyses")
+
+with( df,
+      CrossTable( Prior_MH_claim_000_360, TimePeriod,
+                  prop.chisq = FALSE, chisq = TRUE))
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- tmp %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI)
+
+Var_names <- names(Var)
+
+for( j in 1:length(Var_names)){
+  Formula = as.formula(paste( "Prior_MH_claim_000_360 ~", Var_names[j]))
+  m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+  print(m)
+}
+```
+    
+    
+    
+```{r results='asis'}
+note("Multivariable analysis")
+
+options(prType = 'html')
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI)
+Var_names <- names(Var)
+
+Formula <- as.formula(
+  paste("Prior_MH_claim_000_360 ~", paste(Var_names, collapse="+"))
+)
+
+m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+summary(m); anova(m)
+
+options(prType = NULL)
+```
+      
+    
+# Table 6b. Analyses of MH claim days in year PRIOR to index violence claim    
+     
+Methods: After a descriptive table, zero-inflated negative binomial regression
+and negative binomial are both used. 
+The dependent variable is count of mental health claim days in the year 
+prior to the index violence claim. Covariates are examined one at a time, then
+a selection is included in a multivariable model.   
+       
+```{r eval=var_select}
+# Variable selection
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI)
+Var_names <- names(Var)
+Formula <- as.formula(paste("PriorMHClaimDays_000_360 ~",paste(Var_names, collapse="+")))
+rf <- randomForest::randomForest( Formula,
+                    na.action = na.omit,
+                    importance = TRUE,
+                    data = df )
+
+note("Random forest importance")
+randomForest::importance(rf) %>% 
+  as.data.frame() %>% 
+  mutate( across(where(is.numeric), ~ round(.x, 2)) ) %>% 
+  arrange( desc(IncNodePurity) )
+
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+note("Collinearity")
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI)
+Var_names <- names(Var)
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+```
+      
+      
+## zero-inflated negative binomial multivariable regression    
+     
+     
+```{r}
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"
+
+note("Time period 0 to 360 days") 
+
+Formula <- as.formula("PriorMHClaimDays_000_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI | 
+                      TimePeriod ")
+print(Formula)
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+```
+
+     
+    
+```{r table_6b}
+note("Univariable analyses")
+
+Table <- tableby( TimePeriod ~ PriorMHClaimDays_000_360,
+                  data = df,
+                  total = FALSE,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+Var <- tmp %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI)
+
+Var_names <- names(Var)
+
+for( j in 1:length(Var_names)){
+  Formula = as.formula(paste( "PriorMHClaimDays_000_360 ~", Var_names[j]))
+  m <- glm.nb( Formula, data=tmp )
+  print(summary(m))
+}
+
+```
+    
+    
+## Negative binomial multivariable regression     
+       
+```{r }
+
+note("Multivariable analysis")
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+Var <- tmp %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI)
+Var_names <- names(Var)
+
+Formula <- as.formula(
+  paste("PriorMHClaimDays_000_360 ~", paste(Var_names, collapse="+"))
+)
+
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+```
+     
+     
+```{r eval=FALSE}
+# zero inflated negative binomial
+
+tmp <- df %>% 
+  mutate(PriorMHClaimDays_000_360 = as.integer(PriorMHClaimDays_000_360),
+         Gender = factor(Gender),
+         Race = factor(Race))
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+note("Unadjusted zero-inflated negative binomial")
+
+m <- zeroinfl(PriorMHClaimDays_000_360 ~ TimePeriod, data = tmp, dist = "negbin")
+summary(m)
+
+note("Adjusted zero-inflated negative binomial")
+# Too many variables made model that did not converge (singular matrix)
+
+Formula <- as.formula(
+  PriorMHClaimDays_000_360 ~ TimePeriod + Gender + IndexViolenceClaimAge + Race | 
+    TimePeriod + Race)
+
+m <- zeroinfl(Formula, data = tmp, dist = "negbin")
+summary(m)
+
+```
+
+     
+# Table 6c. Any claim days in year AFTER the index violence claim?
+     
+Methods: After a descriptive table, logistic regression is used. 
+Dependent variable is a binary flag of any mental health claim days in the year 
+after the index violence claim. Covariates are examined one at a time, then
+a selection is included in a multivariable model. The flag for having
+a mental health claim in the prior year is included as a covariate.
+The multivariable model results start with the response being a flag
+for any MH claim between 0 and 360 days. This is followed by models
+for the smaller periods of time: 0 to 90, 91 to 180, 181 to 360 days.   
+     
+     
+```{r eval=var_select}
+# Variable selection
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI, Prior_MH_claim_000_360)
+Var_names <- names(Var)
+Formula <- as.formula(paste("MH_claim_000_360 ~",paste(Var_names, collapse="+")))
+rf <- randomForest::randomForest( Formula,
+                    na.action = na.omit,
+                    importance = TRUE,
+                    data = df )
+
+note("Random forest importance")
+randomForest::importance(rf) %>% 
+  as.data.frame() %>% 
+  mutate( across(where(is.numeric), ~ round(.x, 2)) ) %>% 
+  arrange( desc(MeanDecreaseGini) )
+
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+
+note("Collinearity")
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI, Prior_MH_claim_000_360)
+Var_names <- names(Var)
+Formula <- as.formula(paste("~",paste(Var_names, collapse="+")))
+
+vc <- varclus(Formula, sim="hoeffding", data=df)
+plot(vc)
+
+```
+
+     
+```{r table_6c}
+note("Univariable analyses")
+
+with( df,
+      CrossTable( MH_claim_000_360, TimePeriod,
+                  prop.chisq = FALSE, chisq = TRUE))
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- tmp %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI, Prior_MH_claim_000_360)
+
+Var_names <- names(Var)
+
+for( j in 1:length(Var_names)){
+  Formula = as.formula(paste( "MH_claim_000_360 ~", Var_names[j]))
+  m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+  print(m)
+}
+```
+    
+    
+```{r results='asis'}
+note("Multivariable analysis")
+
+options(prType = 'html')
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI, Prior_MH_claim_000_360)
+Var_names <- names(Var)
+
+Formula <- as.formula(
+  paste("MH_claim_000_360 ~", paste(Var_names, collapse="+"))
+)
+
+m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+summary(m); anova(m)
+
+Formula <- as.formula(
+  paste("MH_claim_000_090 ~", paste(Var_names, collapse="+"))
+)
+
+m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+summary(m); anova(m)
+
+Formula <- as.formula(
+  paste("MH_claim_091_180 ~", paste(Var_names, collapse="+"))
+)
+
+m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+summary(m); anova(m)
+
+Formula <- as.formula(
+  paste("MH_claim_181_360 ~", paste(Var_names, collapse="+"))
+)
+
+m <- lrm( Formula, x=TRUE, y=TRUE, data=tmp )
+summary(m); anova(m)
+
+options(prType = NULL)
+```
+    
+     
+     
+# Table 6d. Analyses of MH claim days in year AFTER the index violence claim 
+    
+Methods: After a descriptive table, negative binomial regression is used. 
+Dependent variable is count of mental health claim days in the year 
+prior to the index violence claim. Covariates are examined one at a time, then
+a selection is included in a multivariable model. The count of mental health
+claim days in the prior year is included as a covariate. Exponeniated
+coefficients are given to be interpreted as Incidence Rate Ratios.
+The multivariable analysis start with the time period 0 to 360 days,
+followed by smaller periods: 0 to 90, 91 to 180, 181 to 360 days.   
+    
+    
+```{r table_6d, eval=FALSE}
+note("Univariable analyses")
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"
+
+Table <- tableby( TimePeriod ~ MHClaimDays_000_360,
+                  data = df,
+                  total = FALSE,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI, PriorMHClaimDays_000_360)
+Var_names <- names(Var)
+
+for( j in 1:length(Var_names)){
+  Formula = as.formula(paste( "MHClaimDays_000_360 ~", Var_names[j]))
+  m <- glm.nb( Formula, data=tmp )
+  print(summary(m))
+}
+
+```
+    
+    
+## Negative binomial multivariable regression   
+    
+    
+```{r}
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI, PriorMHClaimDays_000_360)
+Var_names <- names(Var)
+
+note("Time period 0 to 360 days")
+
+Formula <- as.formula(
+  paste("MHClaimDays_000_360 ~", paste(Var_names, collapse="+"))
+)
+print(Formula)
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+note("Time period 0 to 90 days")
+
+Formula <- as.formula(
+  paste("MHClaimDays_000_090 ~", paste(Var_names, collapse="+"))
+)
+print(Formula)
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+note("Time period 91 to 180 days")
+
+Formula <- as.formula(
+  paste("MHClaimDays_091_180 ~", paste(Var_names, collapse="+"))
+)
+print(Formula)
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+
+note("Time period 181 to 360 days")
+
+Formula <- as.formula(
+  paste("MHClaimDays_181_360 ~", paste(Var_names, collapse="+"))
+)
+print(Formula)
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+```
+        
+        
+## zero-inflated negative binomial multivariable regression    
+      
+```{r}
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"
+
+note("Time period 0 to 360 days") 
+
+Formula <- as.formula("MHClaimDays_000_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+
+note("Time period 0 to 90 days") 
+
+Formula <- as.formula("MHClaimDays_000_090 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+note("Time period 91 to 180 days")
+
+Formula <- as.formula("MHClaimDays_091_180 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+note("Time period 181 to 360 days") 
+
+Formula <- as.formula("MHClaimDays_181_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+note("Incident Rate Ratios")
+est <- cbind( IncidentRateRatio=coef(m), confint(m) )
+round(exp(est), 2)
+
+```
+
+        
+        
+## write file for SAS analyses (no output)  
+        
+```{r eval=FALSE}
+
+tmp <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI, PriorMHClaimDays_000_360,
+          MHClaimDays_000_360, MHClaimDays_000_090, MHClaimDays_091_180, MHClaimDays_181_360,
+          Prior_MH_claim_000_360, MH_claim_000_360, MH_claim_000_090,
+          MH_claim_091_180, MH_claim_181_360) %>% 
+  mutate(
+    Covid = ifelse(TimePeriod == "Covid", 1, 0),
+    Male = ifelse(Gender == "M", 1, 0),
+    Black = ifelse(Race == "Black/African Amerian", 1, 0),
+    White = ifelse(Race == "White", 1, 0),
+    Medicaid = ifelse(IndexViolenceInsurance == "Medicaid", 1, 0),
+    Medicare = ifelse(IndexViolenceInsurance == "Medicare", 1, 0),
+    Penetrating = ifelse(IndexClaimPenetratingFlag == "Yes", 1, 0),
+    Prior_MH_claim = ifelse(Prior_MH_claim_000_360 == "Yes", 1, 0)
+  ) %>% 
+  rename(Age = IndexViolenceClaimAge,
+         SVI = CensusTractSVI) %>% 
+  select(-TimePeriod, -Gender, -Race, -IndexViolenceInsurance, -IndexClaimPenetratingFlag,
+         -Prior_MH_claim_000_360)
+
+write_xlsx(tmp, "analysis08.xlsx")
+
+```
+
+## Compare models in post period (output omitted)  
+       
+```{r eval=FALSE}
+# compare different models
+
+note("Multivariable analysis")
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"
+
+
+note("Time period 0 to 360 days") 
+
+# replace prior days with prior flag
+
+Formula <- as.formula("MHClaimDays_000_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360")
+
+# add other covariates
+Formula <- as.formula("MHClaimDays_000_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+
+# zero inflated negative binomial
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# hurdle
+m <- pscl::hurdle( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# negative binomial
+
+Formula <- as.formula("MHClaimDays_000_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 ")
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+AIC(m)
+
+
+
+
+note("Time period 0 to 90 days")
+
+Formula <- as.formula("MHClaimDays_000_090 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360")
+
+# add other covariates
+Formula <- as.formula("MHClaimDays_000_090 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+
+# zero inflated negative binomial
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# hurdle
+m <- pscl::hurdle( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# negative binomial
+
+Formula <- as.formula("MHClaimDays_000_090 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 ")
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+AIC(m)
+
+
+
+note("Time period 91 to 180 days") 
+
+Formula <- as.formula("MHClaimDays_091_180 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360")
+
+# add other covariates
+Formula <- as.formula("MHClaimDays_091_180 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+
+# zero inflated negative binomial
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# hurdle
+m <- pscl::hurdle( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# negative binomial
+
+Formula <- as.formula("MHClaimDays_091_180 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 ")
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+AIC(m)
+
+
+
+note("Time period 181 to 360 days") 
+
+Formula <- as.formula("MHClaimDays_181_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360")
+
+# add other covariates
+Formula <- as.formula("MHClaimDays_181_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 | 
+                      TimePeriod + Prior_MH_claim_000_360 + Gender + Race +
+                      IndexViolenceClaimAge + IndexViolenceInsurance + 
+                      IndexClaimPenetratingFlag + CensusTractSVI")
+
+# zero inflated negative binomial
+m <- pscl::zeroinfl( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# hurdle
+m <- pscl::hurdle( Formula, data=tmp, dist="negbin" )
+print(summary(m))
+AIC(m)
+
+# negative binomial
+
+Formula <- as.formula("MHClaimDays_181_360 ~ TimePeriod + Gender + Race +
+  IndexViolenceClaimAge + IndexViolenceInsurance + 
+  IndexClaimPenetratingFlag + CensusTractSVI + PriorMHClaimDays_000_360 ")
+m <- glm.nb( Formula, data=tmp )
+print(summary(m))
+AIC(m)
+
+```
+
+    
+```{r eval=FALSE}
+note("Univariable quantile regression")
+
+Table <- tableby( TimePeriod ~ MHClaimDays_000_360,
+                  data = df,
+                  total = FALSE,
+                  control = Controls)
+
+summary(Table, text = TRUE)
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- tmp %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag,
+          CensusTractMedianIncome, CensusTractPctLessThanHighSchool,
+          CensusTractPctPublicAssistanceHousehold, CensusTractPctUnemploymentRate,
+          CensusTractSVI, PriorMHClaimDays_000_360)
+
+Var_names <- names(Var)
+
+for( j in 1:length(Var_names)){
+  Formula = as.formula(paste( "MHClaimDays_000_360 ~", Var_names[j]))
+  m <- Rq( Formula, x=TRUE, y=TRUE, tau=0.5, data=tmp )
+  print(m)
+}
+
+```
+    
+```{r results='asis', eval=FALSE}
+note("Multivariable quantile regression")
+
+options(prType = 'html')
+
+tmp <- df
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+dd <- datadist(tmp)
+options(datadist="dd")
+
+Var <- df %>% 
+  select( TimePeriod, Gender, Race, IndexViolenceClaimAge, IndexViolenceInsurance,
+          IndexClaimPenetratingFlag, CensusTractSVI, PriorMHClaimDays_000_360)
+Var_names <- names(Var)
+
+Formula <- as.formula(
+  paste("MHClaimDays_000_360 ~", paste(Var_names, collapse="+"))
+)
+print(Formula)
+m <- Rq( Formula, x=TRUE, y=TRUE, tau=0.5, data=tmp )
+print(m); summary(m); anova(m)
+
+options(prType = NULL)
+```
+     
+```{r eval=FALSE}
+
+# does not work
+# system is computationally singular, even with one covariate
+
+tmp <- df %>% 
+  mutate(PriorMHClaimDays_000_360 = as.integer(PriorMHClaimDays_000_360),
+         MHClaimDays_000_360 = as.integer(MHClaimDays_000_360),
+         Gender = factor(Gender),
+         Race = factor(Race)) %>% 
+  dplyr::select(PriorMHClaimDays_000_360, MHClaimDays_000_360, 
+                TimePeriod, Gender, Race)
+
+class(tmp$TimePeriod) <- "factor"   # unorder
+
+
+# Unadjusted
+
+m <- zeroinfl(MHClaimDays_000_360 ~ TimePeriod, data = tmp, dist = "negbin")
+summary(m)
+
+# Adjusted
+# Too many variables made model that did not converge (singular matrix)
+
+Formula <- as.formula(
+  PriorMHClaimDays_000_360 ~ TimePeriod + Gender + IndexViolenceClaimAge + Race | 
+    TimePeriod + Race)
+
+m <- zeroinfl(Formula, data = tmp, dist = "negbin")
+summary(m)
+
+```
+
+      
+      
+      
+      
+      
+      
+      
+      
+    
+       
+       
+    
+    
+    
+    
+    
+           
